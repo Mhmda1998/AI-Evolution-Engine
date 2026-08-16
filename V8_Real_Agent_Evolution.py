@@ -1,43 +1,44 @@
 """
-V8 Real Agent Evolution Engine
-==============================
+V8 Real Agent Evolution
+=======================
 
-An experimental evolutionary framework for real AI agents.
+Real AI-agent evolutionary experiment using Google's Gemini API.
 
 Pipeline:
 
-    Benchmark
-        ↓
-    Real LLM Agent
-        ↓
-    Objective Evaluation
-        ↓
-    Fitness Score
-        ↓
+    Benchmark Tasks
+          ↓
+    Real Gemini Agents
+          ↓
+    Evaluation
+          ↓
+    Score
+          ↓
     Elite Selection
-        ↓
+          ↓
     Prompt Mutation
-        ↓
+          ↓
     New Generation
-        ↓
-    Final Elite
 
-Backend:
-    Google Gemini API
+The API key is NEVER stored in this source file.
 
-The API key is NEVER stored in this repository.
-Users provide their own GEMINI_API_KEY environment variable.
+Set:
+
+    GEMINI_API_KEY
+
+before running the experiment.
 """
 
 import os
 import random
 import re
 import statistics
+import time
+
 from dataclasses import dataclass
-from typing import Any, Callable, Dict, List, Tuple
+from typing import Callable, List, Dict, Any
 
 from google import genai
-from google.genai import types
 
 
 # ================================================================
@@ -48,47 +49,16 @@ SEED = 20260816
 
 GENERATIONS = 4
 POPULATION_SIZE = 6
+TASKS_PER_GENERATION = 50
 ELITE_COUNT = 2
 
-TASKS_PER_GENERATION = 30
+# Use a current Gemini model available to the API key.
+MODEL_NAME = "gemini-3-flash-preview"
 
-MODEL_NAME = os.getenv(
-    "GEMINI_MODEL",
-    "gemini-2.5-flash",
-)
+# Small delay between requests.
+REQUEST_DELAY = 0.2
 
 random.seed(SEED)
-
-
-# ================================================================
-# API CONFIGURATION
-# ================================================================
-
-def create_gemini_client():
-    """
-    Create a Gemini client using GEMINI_API_KEY.
-
-    The key must be supplied by the user through
-    an environment variable.
-
-    Never hard-code an API key in this file.
-    """
-
-    api_key = os.getenv("GEMINI_API_KEY")
-
-    if not api_key:
-        raise RuntimeError(
-            "\n"
-            "GEMINI_API_KEY was not found.\n\n"
-            "Set your Gemini API key before running the engine.\n"
-            "Example:\n\n"
-            "Linux/macOS:\n"
-            "    export GEMINI_API_KEY='YOUR_KEY'\n\n"
-            "Windows PowerShell:\n"
-            "    $env:GEMINI_API_KEY='YOUR_KEY'\n"
-        )
-
-    return genai.Client(api_key=api_key)
 
 
 # ================================================================
@@ -103,44 +73,93 @@ class Task:
 
 
 # ================================================================
+# GEMINI BACKEND
+# ================================================================
+
+class GeminiBackend:
+    """
+    Real Gemini API backend.
+
+    The API key is loaded from:
+
+        GEMINI_API_KEY
+
+    The key is never printed or stored in this source file.
+    """
+
+    def __init__(self, model_name: str):
+
+        api_key = os.getenv("GEMINI_API_KEY")
+
+        if not api_key:
+            raise RuntimeError(
+                "GEMINI_API_KEY is not set. "
+                "Set it as an environment variable or "
+                "Kaggle Secret before running."
+            )
+
+        self.client = genai.Client(
+            api_key=api_key
+        )
+
+        self.model_name = model_name
+
+    def generate(
+        self,
+        system_prompt: str,
+        question: str,
+    ) -> str:
+
+        response = self.client.models.generate_content(
+            model=self.model_name,
+            contents=(
+                system_prompt
+                + "\n\n"
+                + "Task:\n"
+                + question
+                + "\n\n"
+                + "Return only the final answer."
+            ),
+        )
+
+        text = getattr(
+            response,
+            "text",
+            None
+        )
+
+        if text is None:
+            return ""
+
+        return str(text).strip()
+
+
+# ================================================================
 # REAL AGENT
 # ================================================================
 
 class RealAgent:
-    """
-    Real AI agent backed by Gemini.
-
-    Each evolutionary child receives a mutated system prompt.
-    """
 
     def __init__(
         self,
         name: str,
-        client,
+        backend: GeminiBackend,
         system_prompt: str,
-        model_name: str = MODEL_NAME,
     ):
+
         self.name = name
-        self.client = client
+        self.backend = backend
         self.system_prompt = system_prompt
-        self.model_name = model_name
 
-    def solve(self, question: str) -> str:
+    def solve(
+        self,
+        question: str,
+    ) -> str:
 
-        response = self.client.models.generate_content(
-            model=self.model_name,
-            contents=question,
-            config=types.GenerateContentConfig(
-                system_instruction=self.system_prompt,
-                temperature=0.2,
-                max_output_tokens=100,
-            ),
+        return self.backend.generate(
+            self.system_prompt,
+            question,
         )
-
-        if not response.text:
-            return ""
-
-        return response.text.strip()
 
 
 # ================================================================
@@ -154,127 +173,105 @@ def build_benchmark(
 
     rng = random.Random(seed)
 
-    tasks: List[Task] = []
+    tasks = []
+
+    # ------------------------------------------------------------
+    # LOGIC
+    # ------------------------------------------------------------
 
     logic_tasks = [
+
         (
-            "If all A are B and all B are C, are all A necessarily C?",
+            "If all A are B and all B are C, "
+            "are all A necessarily C?",
             "yes",
             "logic",
         ),
+
         (
             "If no A is B, can something be both A and B?",
             "no",
             "logic",
         ),
+
         (
-            "If some A is B and every B is C, must some A be C?",
+            "If some A is B and every B is C, "
+            "must some A be C?",
             "yes",
             "logic",
         ),
+
         (
-            "If some A are B and some B are C, must some A be C?",
+            "If some A are B and some B are C, "
+            "must some A be C?",
             "no",
-            "logic",
-        ),
-        (
-            "If all A are B and x is A, must x be B?",
-            "yes",
             "logic",
         ),
     ]
 
-    math_tasks = []
-
-    for _ in range(10):
-        a = rng.randint(10, 99)
-        b = rng.randint(2, 30)
-
-        math_tasks.append(
-            (
-                f"What is {a} × {b}?",
-                str(a * b),
-                "math",
-            )
-        )
+    # ------------------------------------------------------------
+    # CODING
+    # ------------------------------------------------------------
 
     coding_tasks = [
+
         (
             "What Python type stores key-value pairs?",
             "dict",
             "coding",
         ),
+
         (
             "What Python function returns the length of a list?",
             "len",
             "coding",
         ),
+
         (
             "What keyword defines a Python function?",
             "def",
             "coding",
         ),
+
         (
             "What keyword returns a value from a function?",
             "return",
             "coding",
         ),
-        (
-            "What Python type stores an ordered mutable collection?",
-            "list",
-            "coding",
-        ),
-        (
-            "What keyword exits a loop immediately?",
-            "break",
-            "coding",
-        ),
     ]
+
+    # ------------------------------------------------------------
+    # PLANNING
+    # ------------------------------------------------------------
 
     planning_tasks = [
+
         (
-            "Should a critical resource normally be secured before an optional goal?",
+            "Should a critical resource normally be secured "
+            "before an optional goal?",
             "yes",
             "planning",
         ),
+
         (
-            "Should an urgent safety problem normally be handled before a non-urgent task?",
+            "Should an urgent safety problem normally be "
+            "handled before a non-urgent task?",
             "yes",
             "planning",
         ),
+
         (
-            "If a required dependency is missing, should it normally be resolved before the dependent task?",
-            "yes",
-            "planning",
-        ),
-        (
-            "If resources are limited, should essential needs normally have priority?",
+            "If a required dependency is missing, should it "
+            "normally be resolved before the dependent task?",
             "yes",
             "planning",
         ),
     ]
-
-    reasoning_tasks = []
-
-    for _ in range(10):
-        start = rng.randint(20, 200)
-        removed = rng.randint(1, start)
-
-        reasoning_tasks.append(
-            (
-                f"A store has {start} products and sells "
-                f"{removed}. How many remain?",
-                str(start - removed),
-                "reasoning",
-            )
-        )
 
     all_templates = (
         logic_tasks
-        + math_tasks
         + coding_tasks
         + planning_tasks
-        + reasoning_tasks
     )
 
     for _ in range(count):
@@ -298,58 +295,39 @@ def build_benchmark(
 # ANSWER NORMALIZATION
 # ================================================================
 
-def normalize_answer(value: Any) -> str:
+def normalize_answer(
+    value: Any,
+) -> str:
 
     if value is None:
         return ""
 
     text = str(value).strip().lower()
 
+    # Remove common Markdown/code formatting.
     text = re.sub(
-        r"```.*?```",
-        "",
-        text,
-        flags=re.DOTALL,
-    )
-
-    text = text.strip()
-
-    text = re.sub(
-        r"^[`'\" ]+|[`'\" .,!?]+$",
+        r"[`'\"]",
         "",
         text,
     )
 
-    # Remove common explanatory prefixes.
-    prefixes = [
-        "answer:",
-        "final answer:",
-        "the answer is:",
-        "final:",
+    text = text.rstrip(".")
+
+    # Extract very short final answers when possible.
+    lines = [
+        line.strip()
+        for line in text.splitlines()
+        if line.strip()
     ]
 
-    for prefix in prefixes:
-        if text.startswith(prefix):
-            text = text[len(prefix):].strip()
+    if len(lines) == 1:
+        text = lines[0]
 
-    # For short benchmark answers, use the first line.
-    if "\n" in text:
-        lines = [
-            line.strip()
-            for line in text.splitlines()
-            if line.strip()
-        ]
-
-        if lines:
-            text = lines[-1]
-
-    text = text.strip("`'\" .,!?")
-
-    return text
+    return text.strip()
 
 
 # ================================================================
-# OBJECTIVE EVALUATOR
+# EVALUATOR
 # ================================================================
 
 def evaluate_answer(
@@ -357,32 +335,35 @@ def evaluate_answer(
     expected: str,
 ) -> bool:
 
-    predicted = normalize_answer(prediction)
-    expected = normalize_answer(expected)
+    predicted = normalize_answer(
+        prediction
+    )
 
+    expected = normalize_answer(
+        expected
+    )
+
+    # Exact match.
     if predicted == expected:
         return True
 
-    # Handle simple responses such as:
-    # "Yes, because..."
-    if expected in {
-        "yes",
-        "no",
-    }:
+    # Handle responses such as:
+    # "The answer is yes"
+    # "Answer: dict"
+    patterns = [
+        rf"\b{re.escape(expected)}\b",
+    ]
 
-        first_word = predicted.split()[0] if predicted else ""
+    for pattern in patterns:
 
-        return first_word == expected
-
-    # Handle numeric answers embedded in a short explanation.
-    if expected.isdigit():
-
-        numbers = re.findall(
-            r"\b\d+\b",
+        if re.search(
+            pattern,
             predicted,
-        )
+        ):
 
-        return expected in numbers
+            # Only accept if response is reasonably short.
+            if len(predicted) <= 120:
+                return True
 
     return False
 
@@ -398,12 +379,9 @@ def evaluate_agent(
 
     correct = 0
 
-    category_stats: Dict[
-        str,
-        List[int]
-    ] = {}
+    category_stats = {}
 
-    for index, task in enumerate(tasks, 1):
+    for index, task in enumerate(tasks, start=1):
 
         try:
 
@@ -414,8 +392,7 @@ def evaluate_agent(
         except Exception as exc:
 
             print(
-                f"⚠️ {agent.name} API error "
-                f"on task {index}: {exc}"
+                f"⚠️ {agent.name} request error: {exc}"
             )
 
             prediction = ""
@@ -429,7 +406,10 @@ def evaluate_agent(
 
             category_stats[
                 task.category
-            ] = [0, 0]
+            ] = [
+                0,
+                0,
+            ]
 
         category_stats[
             task.category
@@ -443,6 +423,10 @@ def evaluate_agent(
                 task.category
             ][0] += 1
 
+        time.sleep(
+            REQUEST_DELAY
+        )
+
     accuracy = (
         correct / len(tasks) * 100
         if tasks
@@ -450,8 +434,11 @@ def evaluate_agent(
     )
 
     return {
+
         "score": correct,
+
         "accuracy": accuracy,
+
         "categories": category_stats,
     }
 
@@ -460,48 +447,38 @@ def evaluate_agent(
 # MUTATIONS
 # ================================================================
 
-MUTATIONS: List[
-    Tuple[str, str]
-] = [
+MUTATIONS = [
 
     (
         "concise_reasoning",
         (
-            "Solve carefully. "
-            "Return the final answer clearly and concisely."
+            "Reason carefully internally. "
+            "Return the final answer clearly "
+            "and concisely."
+        ),
+    ),
+
+    (
+        "step_by_step",
+        (
+            "Analyze the task systematically "
+            "before deciding on the final answer."
         ),
     ),
 
     (
         "verification",
         (
-            "Before returning your answer, "
-            "verify it carefully."
+            "Check your reasoning and verify "
+            "the final answer before responding."
         ),
     ),
 
     (
         "structured_reasoning",
         (
-            "Analyze the task systematically. "
-            "Check the relevant facts and then provide "
-            "the most accurate final answer."
-        ),
-    ),
-
-    (
-        "precision",
-        (
-            "Prioritize factual correctness and precision. "
-            "Avoid unnecessary assumptions."
-        ),
-    ),
-
-    (
-        "self_check",
-        (
-            "Perform an internal self-check before giving "
-            "your final answer."
+            "Use a structured reasoning process. "
+            "Then provide the final answer."
         ),
     ),
 ]
@@ -522,9 +499,8 @@ def mutate_agent(
 
     return RealAgent(
         name=f"V8-Child-{child_id}",
-        client=parent.client,
+        backend=parent.backend,
         system_prompt=new_prompt,
-        model_name=parent.model_name,
     )
 
 
@@ -536,9 +512,13 @@ def mutate_agent(
 class AgentRecord:
 
     agent: RealAgent
+
     score: float = 0.0
+
     elite: bool = False
+
     parent: str = ""
+
     mutation: str = ""
 
 
@@ -551,17 +531,18 @@ class EvolutionEngine:
     def __init__(
         self,
         initial_agents: List[RealAgent],
-        client,
     ):
 
         self.population = [
-            AgentRecord(agent=a)
-            for a in initial_agents
+
+            AgentRecord(
+                agent=agent
+            )
+
+            for agent in initial_agents
         ]
 
-        self.client = client
-
-        self.history: List[Dict[str, Any]] = []
+        self.history = []
 
     def evaluate_generation(
         self,
@@ -570,15 +551,21 @@ class EvolutionEngine:
     ):
 
         print()
+
         print("=" * 70)
+
         print(
             f"🧬 GENERATION {generation}"
         )
+
         print("=" * 70)
 
-        generation_results = []
-
         for record in self.population:
+
+            print(
+                f"🤖 Evaluating "
+                f"{record.agent.name}..."
+            )
 
             result = evaluate_agent(
                 record.agent,
@@ -589,36 +576,30 @@ class EvolutionEngine:
                 "accuracy"
             ]
 
-            generation_results.append(
-                {
-                    "name": record.agent.name,
-                    "score": record.score,
-                    "parent": record.parent,
-                    "mutation": record.mutation,
-                    "categories": result[
-                        "categories"
-                    ],
-                }
+            print(
+                f"   → {record.score:.2f}%"
             )
 
-            print(
-                f"{record.agent.name:<25}"
-                f" → {record.score:.2f}%"
-            )
+            self.history.append({
+
+                "generation": generation,
+
+                "agent": record.agent.name,
+
+                "score": record.score,
+
+                "parent": record.parent,
+
+                "mutation": record.mutation,
+            })
 
         self.population.sort(
-            key=lambda r: r.score,
+            key=lambda record: record.score,
             reverse=True,
         )
 
-        self.history.append(
-            {
-                "generation": generation,
-                "results": generation_results,
-            }
-        )
-
         print()
+
         print(
             f"🏆 Generation {generation} best: "
             f"{self.population[0].agent.name} "
@@ -629,8 +610,8 @@ class EvolutionEngine:
     def evolve(
         self,
         generations: int,
-        benchmark_factory,
-    ) -> AgentRecord:
+        benchmark_factory: Callable,
+    ):
 
         for generation in range(
             1,
@@ -647,18 +628,29 @@ class EvolutionEngine:
                 tasks,
             )
 
+            # ----------------------------------------------------
+            # Final generation
+            # ----------------------------------------------------
+
             if generation == generations:
+
                 break
 
+            # ----------------------------------------------------
+            # Protect elites
+            # ----------------------------------------------------
+
             elites = [
+
                 AgentRecord(
-                    agent=r.agent,
-                    score=r.score,
+                    agent=record.agent,
+                    score=record.score,
                     elite=True,
-                    parent=r.parent,
-                    mutation=r.mutation,
+                    parent=record.parent,
+                    mutation=record.mutation,
                 )
-                for r in self.population[
+
+                for record in self.population[
                     :ELITE_COUNT
                 ]
             ]
@@ -667,14 +659,22 @@ class EvolutionEngine:
 
             child_id = 1
 
-            while len(next_population) < POPULATION_SIZE:
+            # ----------------------------------------------------
+            # Create children
+            # ----------------------------------------------------
+
+            while len(
+                next_population
+            ) < POPULATION_SIZE:
 
                 parent = random.choice(
                     elites
                 )
 
                 mutation_name, mutation_prompt = (
-                    random.choice(MUTATIONS)
+                    random.choice(
+                        MUTATIONS
+                    )
                 )
 
                 child = mutate_agent(
@@ -685,18 +685,25 @@ class EvolutionEngine:
                 )
 
                 next_population.append(
+
                     AgentRecord(
+
                         agent=child,
+
                         parent=parent.agent.name,
+
                         mutation=mutation_name,
                     )
                 )
 
                 child_id += 1
 
-            self.population = next_population
+            self.population = (
+                next_population
+            )
 
             print()
+
             print(
                 f"🧬 Generation "
                 f"{generation + 1} created."
@@ -707,7 +714,7 @@ class EvolutionEngine:
             )
 
         self.population.sort(
-            key=lambda r: r.score,
+            key=lambda record: record.score,
             reverse=True,
         )
 
@@ -721,79 +728,81 @@ class EvolutionEngine:
 def main():
 
     print("=" * 70)
-    print("🧬 V8 REAL AGENT EVOLUTION ENGINE")
+
+    print(
+        "🧬 V8 REAL AGENT EVOLUTION ENGINE"
+    )
+
     print("=" * 70)
 
     print(
-        f"🤖 Gemini model: {MODEL_NAME}"
+        f"Model: {MODEL_NAME}"
     )
 
     print(
-        f"🧬 Generations: {GENERATIONS}"
+        f"Seed: {SEED}"
     )
 
     print(
-        f"👥 Population: {POPULATION_SIZE}"
+        f"Generations: {GENERATIONS}"
     )
 
     print(
-        f"🛡️ Elite count: {ELITE_COUNT}"
+        f"Population: {POPULATION_SIZE}"
     )
 
     print(
-        f"📋 Tasks/generation: {TASKS_PER_GENERATION}"
+        f"Tasks / generation: "
+        f"{TASKS_PER_GENERATION}"
+    )
+
+    print(
+        f"Elite count: {ELITE_COUNT}"
     )
 
     print()
 
     # ------------------------------------------------------------
-    # Gemini connection
+    # Real Gemini backend
     # ------------------------------------------------------------
 
-    try:
-
-        client = create_gemini_client()
-
-    except Exception as exc:
-
-        print(
-            f"❌ Configuration error:\n{exc}"
-        )
-
-        return
-
-    print(
-        "✅ Gemini API client initialized."
+    backend = GeminiBackend(
+        model_name=MODEL_NAME
     )
 
     # ------------------------------------------------------------
     # Initial population
     # ------------------------------------------------------------
 
+    agents = []
+
     base_prompt = (
-        "You are an AI agent being evaluated on a benchmark. "
-        "Solve each task accurately. "
-        "Follow the user's question carefully. "
-        "Return the most accurate answer."
+        "You are an AI agent participating in "
+        "an experimental evaluation benchmark. "
+        "Analyze each task carefully and provide "
+        "the most accurate answer possible."
     )
 
-    agents: List[RealAgent] = []
-
     for name in [
+
         "V8-Agent-A",
         "V8-Agent-B",
         "V8-Agent-C",
         "V8-Agent-D",
         "V8-Agent-E",
         "V8-Agent-F",
+
     ]:
 
         agents.append(
+
             RealAgent(
+
                 name=name,
-                client=client,
+
+                backend=backend,
+
                 system_prompt=base_prompt,
-                model_name=MODEL_NAME,
             )
         )
 
@@ -802,8 +811,7 @@ def main():
     # ------------------------------------------------------------
 
     engine = EvolutionEngine(
-        initial_agents=agents,
-        client=client,
+        initial_agents=agents
     )
 
     best = engine.evolve(
@@ -812,20 +820,27 @@ def main():
     )
 
     # ------------------------------------------------------------
-    # Final result
+    # Final report
     # ------------------------------------------------------------
 
     print()
-    print("=" * 70)
-    print("👑 FINAL V8 ELITE")
+
     print("=" * 70)
 
     print(
-        f"Model: {best.agent.name}"
+        "👑 FINAL V8 ELITE"
+    )
+
+    print("=" * 70)
+
+    print(
+        f"Model: "
+        f"{best.agent.name}"
     )
 
     print(
-        f"Score: {best.score:.2f}%"
+        f"Score: "
+        f"{best.score:.2f}%"
     )
 
     print(
@@ -839,34 +854,23 @@ def main():
     )
 
     print()
+
     print(
-        "🧬 Evolution history:"
+        "📊 EVOLUTION HISTORY"
     )
 
-    for generation in engine.history:
+    print("-" * 70)
 
-        scores = [
-            item["score"]
-            for item in generation["results"]
-        ]
+    for item in engine.history:
 
         print(
-            f"Generation "
-            f"{generation['generation']}: "
-            f"best={max(scores):.2f}% | "
-            f"mean={statistics.mean(scores):.2f}%"
+            f"G{item['generation']} | "
+            f"{item['agent']:<20} | "
+            f"{item['score']:.2f}%"
         )
 
     print()
-    print(
-        "🔐 API key was supplied externally."
-    )
 
-    print(
-        "🚫 No API key is stored by this program."
-    )
-
-    print()
     print(
         "✅ V8 REAL AGENT EVOLUTION COMPLETE"
     )
@@ -877,4 +881,5 @@ def main():
 # ================================================================
 
 if __name__ == "__main__":
+
     main()
