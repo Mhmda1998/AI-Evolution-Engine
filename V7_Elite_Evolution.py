@@ -1,56 +1,46 @@
 """
-============================================================
-AI-Evolution-Engine
-V7 Elite Evolution
-============================================================
+V7 Elite Evolution Engine
+=========================
 
-Experimental evolutionary framework for AI-agent populations.
+An experimental AI-agent evolution framework.
 
-Evolution pipeline:
-
-    Generation 1
+Pipeline:
+    Population
         ↓
-    Arena Evaluation
+    Benchmark
         ↓
-    Generation 2
+    Evaluation
+        ↓
+    Parent/Elite Selection
         ↓
     Adaptive Mutation
         ↓
-    Generation 3
+    Offspring Generation
         ↓
-    Elite Selection
+    New Generation
         ↓
-    Generation 4
-        ↓
-    Smart Mutation
-        ↓
-    V7.1 Robustness Testing
+    Unseen Robustness Testing
 
-Main concepts:
-- Population-based evaluation
-- Parent → Child evolution
-- Elite preservation
-- Adaptive mutation
-- Skill-based mutation
-- Unseen benchmarks
-- Multi-seed robustness
-
-IMPORTANT:
-This repository is an experimental research framework.
-The benchmark simulator is not evidence of general intelligence.
+Author: Mhmda1998
+License: MIT
 """
+
+from __future__ import annotations
 
 import copy
 import random
 import statistics
-from collections import defaultdict
+from dataclasses import dataclass, field
+from typing import Any, Dict, List, Optional, Tuple
 
 
-# ============================================================
+# ================================================================
 # CONFIGURATION
-# ============================================================
+# ================================================================
 
-SKILLS = [
+SEED = 20260702
+
+TASK_TYPES = [
     "logic",
     "math",
     "coding",
@@ -58,76 +48,82 @@ SKILLS = [
     "reasoning",
 ]
 
-BENCHMARK_SIZE = 100
+SKILLS = TASK_TYPES.copy()
+
+TASKS_PER_BENCHMARK = 100
+POPULATION_SIZE = 6
+ELITE_COUNT = 2
+
+MAX_GENERATIONS = 4
+
+MUTATION_STEP = 0.05
+MAX_SKILL = 0.99
+MIN_SKILL = 0.20
+
+ROBUSTNESS_SEEDS = list(range(1, 11))
+ROBUSTNESS_TASKS_PER_SEED = 100
 
 
-# ============================================================
-# AGENT
-# ============================================================
+# ================================================================
+# DATA STRUCTURES
+# ================================================================
 
-class AdaptiveAgent:
-    """
-    Lightweight experimental agent.
+@dataclass
+class Task:
+    task_id: str
+    task_type: str
+    question: str
+    answer: Any
 
-    The agent contains a skill profile representing
-    its current capability configuration.
-    """
 
-    def __init__(self, name, skills):
-        self.name = name
-        self.skills = dict(skills)
+@dataclass
+class Agent:
+    name: str
+    skills: Dict[str, float]
+    parent: Optional[str] = None
+    mutation: Optional[str] = None
+    generation: int = 0
+    elite: bool = False
 
-        # Compatibility with the original V7
-        # mutation mechanism.
-        self.learning = dict(skills)
+    def clone(self, name: str) -> "Agent":
+        """Create a deep copy of the agent with a new name."""
 
-    def solve(self, task):
-        """
-        Simulated task solving.
-
-        Returns a dictionary compatible with the
-        original V7 arena.
-        """
-
-        task_type = task["type"]
-
-        probability = self.skills.get(
-            task_type,
-            0.70
+        return Agent(
+            name=name,
+            skills=copy.deepcopy(self.skills),
+            parent=self.name,
+            mutation=None,
+            generation=self.generation + 1,
+            elite=False,
         )
 
-        probability = max(
-            0.0,
-            min(0.99, probability)
-        )
 
-        correct = random.random() < probability
+# ================================================================
+# TASK GENERATION
+# ================================================================
 
-        return {
-            "correct": correct
-        }
-
-
-# ============================================================
-# BENCHMARK GENERATOR
-# ============================================================
-
-def generate_diverse_unseen_tasks(
-    n=100,
-    seed=20260702
-):
+def generate_tasks(
+    seed: int,
+    n: int = TASKS_PER_BENCHMARK,
+) -> List[Task]:
     """
     Generate a deterministic benchmark.
+
+    The benchmark contains five task categories:
+        logic
+        math
+        coding
+        planning
+        reasoning
     """
 
     rng = random.Random(seed)
 
-    tasks = []
+    tasks: List[Task] = []
 
-    logic_questions = [
+    logic_templates = [
         (
-            "If all A are B, and all B are C, "
-            "are all A necessarily C?",
+            "If all A are B, and all B are C, are all A necessarily C?",
             "yes",
         ),
         (
@@ -135,21 +131,22 @@ def generate_diverse_unseen_tasks(
             "no",
         ),
         (
-            "If some A is B and every B is C, "
-            "must some A be C?",
+            "If some A is B and every B is C, must some A be C?",
             "yes",
         ),
         (
-            "If some A are B and some B are C, "
-            "must some A be C?",
+            "If some A are B and some B are C, must some A be C?",
+            "no",
+        ),
+        (
+            "If all A are B and no B is C, can an A be C?",
             "no",
         ),
     ]
 
-    coding_questions = [
+    coding_templates = [
         (
-            "What Python function is commonly used "
-            "to get the length of a list?",
+            "What Python function is commonly used to get the length of a list?",
             "len",
         ),
         (
@@ -169,7 +166,7 @@ def generate_diverse_unseen_tasks(
             "def",
         ),
         (
-            "What keyword is used to return a value?",
+            "What keyword is used to return a value from a Python function?",
             "return",
         ),
         (
@@ -190,126 +187,143 @@ def generate_diverse_unseen_tasks(
         ),
     ]
 
-    planning_questions = [
+    planning_templates = [
         (
-            "If a critical resource is running low, "
-            "should you secure it before optional goals?",
+            "If a critical resource is running low, should you secure it before optional goals?",
             "yes",
         ),
         (
-            "You need food, water and shelter. "
-            "Which should normally be secured first?",
+            "You need food, water and shelter. Which should normally be secured first for immediate survival?",
             "water",
         ),
         (
-            "If an urgent safety problem appears, "
-            "should it be handled before a non-urgent task?",
+            "If an urgent safety problem appears, should it be handled before a non-urgent task?",
             "yes",
         ),
         (
-            "If a required dependency is missing, "
-            "should you resolve it first?",
+            "If a required dependency is missing, should you resolve it before the dependent task?",
             "yes",
         ),
         (
-            "If a task is optional and another is critical, "
-            "which should receive priority?",
+            "If a task is optional and another task is critical, which should receive priority?",
             "critical",
         ),
     ]
 
-    # -----------------------------
-    # Math
-    # -----------------------------
+    # ------------------------------------------------------------
+    # Logic tasks
+    # ------------------------------------------------------------
 
-    for _ in range(20):
+    for i in range(max(1, n // 5)):
+        question, answer = rng.choice(logic_templates)
 
+        tasks.append(
+            Task(
+                task_id=f"logic-{i}",
+                task_type="logic",
+                question=question,
+                answer=answer,
+            )
+        )
+
+    # ------------------------------------------------------------
+    # Math tasks
+    # ------------------------------------------------------------
+
+    for i in range(max(1, n // 5)):
         a = rng.randint(10, 999)
         b = rng.randint(2, 99)
 
-        tasks.append({
-            "type": "math",
-            "question": f"What is {a} × {b}?",
-            "answer": a * b,
-        })
+        tasks.append(
+            Task(
+                task_id=f"math-{i}",
+                task_type="math",
+                question=f"What is {a} × {b}?",
+                answer=a * b,
+            )
+        )
 
-    # -----------------------------
-    # Reasoning
-    # -----------------------------
+    # ------------------------------------------------------------
+    # Coding tasks
+    # ------------------------------------------------------------
 
-    for _ in range(20):
+    for i in range(max(1, n // 5)):
+        question, answer = rng.choice(coding_templates)
+
+        tasks.append(
+            Task(
+                task_id=f"coding-{i}",
+                task_type="coding",
+                question=question,
+                answer=answer,
+            )
+        )
+
+    # ------------------------------------------------------------
+    # Planning tasks
+    # ------------------------------------------------------------
+
+    for i in range(max(1, n // 5)):
+        question, answer = rng.choice(planning_templates)
+
+        tasks.append(
+            Task(
+                task_id=f"planning-{i}",
+                task_type="planning",
+                question=question,
+                answer=answer,
+            )
+        )
+
+    # ------------------------------------------------------------
+    # Reasoning tasks
+    # ------------------------------------------------------------
+
+    for i in range(max(1, n // 5)):
+        start = rng.randint(20, 200)
+        removed = rng.randint(1, start)
+
+        tasks.append(
+            Task(
+                task_id=f"reasoning-{i}",
+                task_type="reasoning",
+                question=(
+                    f"A store has {start} products and sells "
+                    f"{removed}. How many remain?"
+                ),
+                answer=start - removed,
+            )
+        )
+
+    # If rounding caused fewer than n tasks, fill the remainder.
+    while len(tasks) < n:
 
         start = rng.randint(20, 200)
         removed = rng.randint(1, start)
 
-        tasks.append({
-            "type": "reasoning",
-            "question": (
-                f"A store has {start} products "
-                f"and sells {removed}. "
-                f"How many remain?"
-            ),
-            "answer": start - removed,
-        })
-
-    # -----------------------------
-    # Coding
-    # -----------------------------
-
-    for _ in range(20):
-
-        question, answer = rng.choice(
-            coding_questions
+        tasks.append(
+            Task(
+                task_id=f"reasoning-extra-{len(tasks)}",
+                task_type="reasoning",
+                question=(
+                    f"A store has {start} products and sells "
+                    f"{removed}. How many remain?"
+                ),
+                answer=start - removed,
+            )
         )
-
-        tasks.append({
-            "type": "coding",
-            "question": question,
-            "answer": answer,
-        })
-
-    # -----------------------------
-    # Planning
-    # -----------------------------
-
-    for _ in range(20):
-
-        question, answer = rng.choice(
-            planning_questions
-        )
-
-        tasks.append({
-            "type": "planning",
-            "question": question,
-            "answer": answer,
-        })
-
-    # -----------------------------
-    # Logic
-    # -----------------------------
-
-    for _ in range(20):
-
-        question, answer = rng.choice(
-            logic_questions
-        )
-
-        tasks.append({
-            "type": "logic",
-            "question": question,
-            "answer": answer,
-        })
 
     rng.shuffle(tasks)
 
     return tasks[:n]
 
 
-# ============================================================
-# NORMALIZATION
-# ============================================================
+# ================================================================
+# ANSWER NORMALIZATION
+# ================================================================
 
-def normalize_answer(value):
+def normalize_answer(value: Any) -> str:
+    """Normalize simple benchmark answers."""
 
     if value is None:
         return ""
@@ -333,936 +347,891 @@ def normalize_answer(value):
         "`break`": "break",
     }
 
-    return replacements.get(
-        value,
-        value
+    return replacements.get(value, value)
+
+
+# ================================================================
+# AGENT SIMULATION
+# ================================================================
+
+def simulate_agent(
+    agent: Agent,
+    task: Task,
+    rng: random.Random,
+) -> Any:
+    """
+    Simulate an agent answering a task.
+
+    This is intentionally lightweight and deterministic under
+    a supplied random generator.
+
+    Skill values represent the agent's probability of solving
+    a task from that category.
+    """
+
+    skill = task.task_type
+
+    probability = agent.skills.get(
+        skill,
+        0.70,
     )
 
-
-# ============================================================
-# GENERATION 1
-# ============================================================
-
-def generation_1():
-
-    print()
-    print("=" * 70)
-    print("🏟️ V7 GENERATION 1 — ARENA")
-    print("=" * 70)
-
-    random.seed(20260702)
-
-    benchmark = generate_diverse_unseen_tasks(
-        BENCHMARK_SIZE,
-        seed=20260702
+    probability = max(
+        0.0,
+        min(
+            MAX_SKILL,
+            probability,
+        ),
     )
 
-    population = {
+    success = rng.random() < probability
 
-        "Adaptive Alpha": {
-            "agent": AdaptiveAgent(
-                "Adaptive Alpha",
-                {
-                    "logic": 0.90,
-                    "math": 0.90,
-                    "coding": 0.85,
-                    "planning": 0.80,
-                    "reasoning": 0.90,
-                },
-            ),
-            "parent": None,
-            "mutation": None,
-            "elite": True,
-        },
+    if not success:
+        return "__INCORRECT__"
 
-        "Adaptive Beta": {
-            "agent": AdaptiveAgent(
-                "Adaptive Beta",
-                {
-                    "logic": 0.85,
-                    "math": 0.90,
-                    "coding": 0.75,
-                    "planning": 0.75,
-                    "reasoning": 0.90,
-                },
-            ),
-            "parent": None,
-            "mutation": None,
-            "elite": True,
-        },
+    return task.answer
 
-        "Adaptive Gamma": {
-            "agent": AdaptiveAgent(
-                "Adaptive Gamma",
-                {
-                    "logic": 0.75,
-                    "math": 0.80,
-                    "coding": 0.80,
-                    "planning": 0.75,
-                    "reasoning": 0.75,
-                },
-            ),
-            "parent": None,
-            "mutation": None,
-            "elite": True,
-        },
+
+# ================================================================
+# AGENT EVALUATION
+# ================================================================
+
+def evaluate_agent(
+    agent: Agent,
+    benchmark: List[Task],
+    seed: int,
+) -> Dict[str, Any]:
+    """Evaluate one agent on a benchmark."""
+
+    rng = random.Random(seed)
+
+    correct = 0
+
+    by_skill = {
+        skill: [0, 0]
+        for skill in SKILLS
     }
 
-    results = {}
+    for task in benchmark:
 
-    for name, data in population.items():
-
-        correct = 0
-
-        for task in benchmark:
-
-            result = data["agent"].solve(task)
-
-            correct += int(
-                result.get(
-                    "correct",
-                    False
-                )
-            )
-
-        accuracy = (
-            correct /
-            len(benchmark) *
-            100
+        prediction = simulate_agent(
+            agent,
+            task,
+            rng,
         )
 
-        results[name] = accuracy
-        data["score"] = accuracy
-
-        print(
-            f"{name}: "
-            f"{accuracy:.2f}%"
+        expected = normalize_answer(
+            task.answer
         )
 
-    print()
-    print("🏆 GENERATION 1 COMPLETE")
-
-    return population, results
-
-
-# ============================================================
-# ADAPTIVE MUTATION
-# ============================================================
-
-def adaptive_mutation(
-    population,
-    results
-):
-
-    print()
-    print("=" * 70)
-    print("🧬 V7 GENERATION 2 — ADAPTIVE MUTATION")
-    print("=" * 70)
-
-    skills = list(SKILLS)
-
-    mutation_history = {}
-
-    for name, data in population.items():
-
-        parent = data.get("parent")
-        mutation = data.get("mutation")
-
-        if not parent or not mutation:
-            continue
-
-        if parent not in results:
-            continue
-
-        change = (
-            results[name] -
-            results[parent]
+        predicted = normalize_answer(
+            prediction
         )
 
-        mutation_history.setdefault(
-            mutation,
-            []
-        ).append(change)
+        is_correct = predicted == expected
 
-    weights = {}
+        by_skill[task.task_type][1] += 1
 
-    for skill in skills:
+        if is_correct:
 
-        history = mutation_history.get(
-            skill,
-            []
-        )
+            correct += 1
 
-        if not history:
+            by_skill[task.task_type][0] += 1
 
-            weights[skill] = 1.0
-            continue
-
-        avg = statistics.mean(history)
-
-        if avg > 0:
-            weights[skill] = 2.0
-
-        elif avg < 0:
-            weights[skill] = 0.5
-
-        else:
-            weights[skill] = 1.0
-
-    print()
-    print("🧠 MUTATION WEIGHTS")
-
-    for skill, weight in weights.items():
-
-        print(
-            f"{skill:<10} → "
-            f"{weight:.2f}"
-        )
-
-    # Protected elites
-
-    ranking = sorted(
-        population.items(),
-        key=lambda x: x[1]["score"],
-        reverse=True
+    accuracy = (
+        correct /
+        len(benchmark) *
+        100
     )
 
-    elites = ranking[:3]
+    skill_scores = {}
 
-    next_population = {}
+    for skill, values in by_skill.items():
 
-    print()
-    print("🛡️ PROTECTED ELITES")
+        skill_correct, skill_total = values
 
-    for name, data in elites:
+        if skill_total:
 
-        next_population[name] = (
-            copy.deepcopy(data)
-        )
+            skill_scores[skill] = (
+                skill_correct /
+                skill_total *
+                100
+            )
 
-        next_population[name]["elite"] = True
+        else:
 
-        print(
-            f"🏆 {name} → "
-            f"{data['score']:.2f}%"
-        )
+            skill_scores[skill] = 0.0
 
-    # Children
+    return {
+        "agent": agent.name,
+        "score": correct,
+        "accuracy": accuracy,
+        "skills": skill_scores,
+    }
 
-    print()
-    print("🧬 NEW OFFSPRING")
 
-    for child_id, (
-        parent_name,
-        parent_data
-    ) in enumerate(
-        elites,
-        start=1
-    ):
+# ================================================================
+# INITIAL POPULATION
+# ================================================================
 
-        child_agent = copy.deepcopy(
-            parent_data["agent"]
-        )
+def create_initial_population() -> List[Agent]:
+    """Create the first generation."""
 
-        mutation = random.choices(
-            skills,
-            weights=[
-                weights[s]
-                for s in skills
-            ],
-            k=1
-        )[0]
+    return [
+        Agent(
+            name="Adaptive Alpha",
+            generation=0,
+            skills={
+                "logic": 0.90,
+                "math": 0.95,
+                "coding": 0.80,
+                "planning": 0.75,
+                "reasoning": 0.90,
+            },
+            elite=True,
+        ),
 
-        current = child_agent.learning.get(
+        Agent(
+            name="Adaptive Beta",
+            generation=0,
+            skills={
+                "logic": 0.95,
+                "math": 0.95,
+                "coding": 0.78,
+                "planning": 0.70,
+                "reasoning": 0.92,
+            },
+            elite=True,
+        ),
+
+        Agent(
+            name="Adaptive Gamma",
+            generation=0,
+            skills={
+                "logic": 0.80,
+                "math": 0.85,
+                "coding": 0.75,
+                "planning": 0.82,
+                "reasoning": 0.78,
+            },
+        ),
+
+        Agent(
+            name="Adaptive Delta",
+            generation=0,
+            skills={
+                "logic": 0.84,
+                "math": 0.88,
+                "coding": 0.82,
+                "planning": 0.78,
+                "reasoning": 0.80,
+            },
+        ),
+
+        Agent(
+            name="Adaptive Epsilon",
+            generation=0,
+            skills={
+                "logic": 0.82,
+                "math": 0.90,
+                "coding": 0.86,
+                "planning": 0.72,
+                "reasoning": 0.84,
+            },
+        ),
+
+        Agent(
+            name="Adaptive Zeta",
+            generation=0,
+            skills={
+                "logic": 0.78,
+                "math": 0.86,
+                "coding": 0.80,
+                "planning": 0.88,
+                "reasoning": 0.82,
+            },
+        ),
+    ]
+
+
+# ================================================================
+# MUTATION ANALYSIS
+# ================================================================
+
+def choose_weakest_skill(agent: Agent) -> str:
+    """Find the weakest skill of an agent."""
+
+    return min(
+        agent.skills,
+        key=agent.skills.get,
+    )
+
+
+def mutate_agent(
+    parent: Agent,
+    mutation: str,
+    amount: float = MUTATION_STEP,
+    child_name: str = "Child",
+) -> Agent:
+    """
+    Create an offspring with a targeted mutation.
+
+    The parent is never modified.
+    """
+
+    child = parent.clone(
+        name=child_name
+    )
+
+    child.mutation = mutation
+
+    child.skills[mutation] = min(
+        MAX_SKILL,
+        child.skills.get(
             mutation,
-            0.05
+            0.70,
+        ) + amount,
+    )
+
+    return child
+
+
+# ================================================================
+# ELITE SELECTION
+# ================================================================
+
+def select_elites(
+    population: List[Agent],
+    scores: Dict[str, float],
+    elite_count: int,
+) -> List[Agent]:
+    """Select highest scoring agents."""
+
+    ranked = sorted(
+        population,
+        key=lambda agent: scores[agent.name],
+        reverse=True,
+    )
+
+    elites = []
+
+    for agent in ranked[:elite_count]:
+
+        elite = copy.deepcopy(agent)
+
+        elite.elite = True
+
+        elites.append(elite)
+
+    return elites
+
+
+# ================================================================
+# GENERATE NEXT GENERATION
+# ================================================================
+
+def generate_next_generation(
+    population: List[Agent],
+    scores: Dict[str, float],
+    generation: int,
+    rng: random.Random,
+) -> List[Agent]:
+    """
+    Preserve elites and generate targeted offspring.
+    """
+
+    elites = select_elites(
+        population,
+        scores,
+        ELITE_COUNT,
+    )
+
+    next_population = []
+
+    # ------------------------------------------------------------
+    # Protected elites
+    # ------------------------------------------------------------
+
+    for elite in elites:
+
+        elite.generation = generation
+
+        next_population.append(
+            elite
         )
 
-        child_agent.learning[
-            mutation
-        ] = min(
-            0.40,
-            current + 0.05
-        )
+    # ------------------------------------------------------------
+    # Offspring
+    # ------------------------------------------------------------
 
-        child_agent.skills[
-            mutation
-        ] = child_agent.learning[
-            mutation
+    child_id = 1
+
+    while len(next_population) < POPULATION_SIZE:
+
+        # Weighted parent selection.
+        weights = [
+            max(
+                1.0,
+                scores[e.name],
+            )
+            for e in elites
         ]
 
+        parent = rng.choices(
+            elites,
+            weights=weights,
+            k=1,
+        )[0]
+
+        # Focus mutation on the weakest skill.
+        weakest = choose_weakest_skill(
+            parent
+        )
+
+        # Occasionally explore another skill.
+        if rng.random() < 0.25:
+            mutation = rng.choice(
+                SKILLS
+            )
+        else:
+            mutation = weakest
+
+        # Adaptive mutation size.
+        amount = MUTATION_STEP
+
+        if (
+            parent.skills.get(
+                weakest,
+                0.0
+            )
+            < 0.80
+        ):
+            amount = 0.08
+
         child_name = (
-            f"V7-G2-Child-{child_id}"
+            f"V7-G{generation}-Child-{child_id}"
         )
 
-        next_population[
-            child_name
-        ] = {
-            "agent": child_agent,
-            "parent": parent_name,
-            "mutation": mutation,
-            "elite": False,
-            "score": None,
-        }
-
-        print(
-            f"🧬 {child_name} "
-            f"| Parent: {parent_name} "
-            f"| Mutation: {mutation}"
+        child = mutate_agent(
+            parent=parent,
+            mutation=mutation,
+            amount=amount,
+            child_name=child_name,
         )
+
+        child.generation = generation
+
+        next_population.append(
+            child
+        )
+
+        child_id += 1
 
     return next_population
 
 
-# ============================================================
-# ARENA EVALUATION
-# ============================================================
+# ================================================================
+# GENERATION REPORT
+# ================================================================
 
-def evaluate_population(
-    population,
-    seed
-):
+def print_generation_report(
+    generation: int,
+    results: Dict[str, Dict[str, Any]],
+    population: List[Agent],
+) -> None:
+    """Print a readable leaderboard."""
 
-    random.seed(seed)
-
-    benchmark = generate_diverse_unseen_tasks(
-        BENCHMARK_SIZE,
-        seed=seed
+    print()
+    print("=" * 70)
+    print(
+        f"🏟️ V7 GENERATION {generation} "
+        f"LEADERBOARD"
     )
-
-    results = {}
-
-    print()
-    print("=" * 70)
-    print("🏟️ ADAPTIVE ARENA")
-    print("=" * 70)
-
-    for name, data in population.items():
-
-        correct = 0
-
-        for task in benchmark:
-
-            try:
-
-                result = (
-                    data["agent"]
-                    .solve(task)
-                )
-
-                correct += int(
-                    result.get(
-                        "correct",
-                        False
-                    )
-                )
-
-            except Exception:
-
-                pass
-
-        accuracy = (
-            correct /
-            len(benchmark) *
-            100
-        )
-
-        data["score"] = accuracy
-
-        results[name] = accuracy
-
-        print(
-            f"{name:<25} "
-            f"→ {accuracy:.2f}%"
-        )
-
-    return results
-
-
-# ============================================================
-# GENERATION 3
-# ============================================================
-
-def generation_3(
-    population,
-    results
-):
-
-    print()
-    print("=" * 70)
-    print("🧬 V7 GENERATION 3")
     print("=" * 70)
 
     ranking = sorted(
-        population.items(),
-        key=lambda x: x[1]["score"],
-        reverse=True
+        results.items(),
+        key=lambda item: item[1]["accuracy"],
+        reverse=True,
     )
 
-    elites = ranking[:3]
-
-    print()
-    print("🛡️ PROTECTED ELITES")
-
-    generation = {}
-
-    for name, data in elites:
-
-        generation[name] = (
-            copy.deepcopy(data)
-        )
-
-        generation[name]["elite"] = True
-        generation[name]["generation"] = 3
-
-        print(
-            f"🏆 {name} → "
-            f"{data['score']:.2f}%"
-        )
-
-    # Parent weights
-
-    parent_names = [
-        name
-        for name, _
-        in elites
-    ]
-
-    parent_weights = []
-
-    for name, data in elites:
-
-        weight = max(
-            1.0,
-            data["score"] / 50
-        )
-
-        parent_weights.append(weight)
-
-    # Mutation performance
-
-    mutation_weights = {
-        skill: 1.0
-        for skill in SKILLS
-    }
-
-    for name, data in population.items():
-
-        mutation = data.get(
-            "mutation"
-        )
-
-        parent = data.get(
-            "parent"
-        )
-
-        if (
-            mutation in mutation_weights
-            and parent in results
-        ):
-
-            change = (
-                results[name] -
-                results[parent]
-            )
-
-            if change >= 5:
-
-                mutation_weights[
-                    mutation
-                ] = 3.0
-
-            elif change > 0:
-
-                mutation_weights[
-                    mutation
-                ] = 2.0
-
-            elif change < 0:
-
-                mutation_weights[
-                    mutation
-                ] = 0.4
-
-    print()
-    print("🧬 MUTATION WEIGHTS")
-
-    for skill, weight in (
-        mutation_weights.items()
+    for position, (name, data) in enumerate(
+        ranking,
+        start=1,
     ):
 
-        print(
-            f"{skill:<10} → "
-            f"{weight:.2f}"
+        agent = next(
+            a for a in population
+            if a.name == name
         )
 
-    # Generate children
-
-    print()
-    print("🧬 GENERATING OFFSPRING")
-
-    for child_id in range(1, 4):
-
-        parent_name = random.choices(
-            parent_names,
-            weights=parent_weights,
-            k=1
-        )[0]
-
-        parent = generation[
-            parent_name
-        ]
-
-        child_agent = copy.deepcopy(
-            parent["agent"]
-        )
-
-        mutation = random.choices(
-            SKILLS,
-            weights=[
-                mutation_weights[s]
-                for s in SKILLS
-            ],
-            k=1
-        )[0]
-
-        current = (
-            child_agent.learning.get(
-                mutation,
-                0.05
-            )
-        )
-
-        child_agent.learning[
-            mutation
-        ] = min(
-            0.45,
-            current + 0.05
-        )
-
-        child_agent.skills[
-            mutation
-        ] = child_agent.learning[
-            mutation
-        ]
-
-        name = (
-            f"V7-G3-Child-{child_id}"
-        )
-
-        generation[name] = {
-            "agent": child_agent,
-            "parent": parent_name,
-            "mutation": mutation,
-            "elite": False,
-            "generation": 3,
-            "score": None,
-        }
-
-        print(
-            f"🧬 {name}"
+        marker = (
+            "🏆"
+            if agent.elite
+            else "🧬"
         )
 
         print(
-            f"   Parent: {parent_name}"
+            f"{position}. "
+            f"{marker} "
+            f"{name:<24} "
+            f"→ {data['accuracy']:.2f}%"
         )
 
-        print(
-            f"   Mutation: {mutation}"
-        )
 
-    return generation
+# ================================================================
+# MULTI-SEED ROBUSTNESS TEST
+# ================================================================
 
+def robustness_test(
+    elite: Agent,
+    seeds: List[int] = ROBUSTNESS_SEEDS,
+) -> Dict[str, Any]:
+    """
+    Evaluate the final elite on independent unseen benchmarks.
 
-# ============================================================
-# GENERATION 4
-# ============================================================
-
-def generation_4(
-    elite_name,
-    elite_agent,
-    elite_score,
-    seed=2027
-):
+    No learning.
+    No mutation.
+    No population changes.
+    """
 
     print()
     print("=" * 70)
-    print(
-        "🧬 V7 GENERATION 4 — "
-        "SMART ELITE EVOLUTION"
-    )
+    print("🧪 V7.1 MULTI-SEED UNSEEN ROBUSTNESS TEST")
     print("=" * 70)
 
-    random.seed(seed)
-
-    elite_skills = dict(
-        elite_agent.skills
-    )
-
-    print()
-    print("🛡️ PROTECTED ELITE")
-
     print(
-        f"{elite_name} → "
-        f"{elite_score:.2f}%"
+        f"🛡️ Elite: {elite.name}"
     )
 
     print(
-        "Elite will NOT be mutated directly."
+        "🚫 Learning: DISABLED"
     )
 
-    weakness = min(
-        elite_skills,
-        key=elite_skills.get
-    )
-
-    print()
     print(
-        f"🎯 Detected weakness: "
-        f"{weakness}"
+        "🚫 Mutation: DISABLED"
     )
 
-    mutation_plan = [
-        ("logic", 0.08),
-        ("logic", 0.12),
-        ("planning", 0.08),
-        ("reasoning", 0.08),
-        ("coding", 0.05),
-    ]
+    print(
+        f"🌱 Seeds: {len(seeds)}"
+    )
 
-    children = {}
+    print(
+        f"📋 Tasks per seed: "
+        f"{ROBUSTNESS_TASKS_PER_SEED}"
+    )
 
-    for i, (
-        mutation,
-        amount
-    ) in enumerate(
-        mutation_plan,
-        start=1
-    ):
+    results = []
 
-        skills = dict(
-            elite_skills
+    for seed in seeds:
+
+        benchmark = generate_tasks(
+            seed=seed,
+            n=ROBUSTNESS_TASKS_PER_SEED,
         )
-
-        skills[mutation] = min(
-            0.99,
-            skills[mutation] + amount
-        )
-
-        # Controlled trade-off
-
-        if mutation != "math":
-
-            skills["math"] = max(
-                0.80,
-                skills["math"] - 0.01
-            )
-
-        name = (
-            f"V7-G4-Child-{i}"
-        )
-
-        children[name] = {
-            "agent": AdaptiveAgent(
-                name,
-                skills
-            ),
-            "parent": elite_name,
-            "mutation": mutation,
-            "skills": skills,
-        }
-
-    # Benchmark
-
-    benchmark = generate_diverse_unseen_tasks(
-        100,
-        seed=seed
-    )
-
-    # Evaluate elite
-
-    elite_results = evaluate_agent(
-        elite_agent,
-        benchmark
-    )
-
-    leaderboard = [
-        (
-            elite_name,
-            elite_results["score"],
-            "PROTECTED ELITE"
-        )
-    ]
-
-    print()
-    print(
-        "🏆 PROTECTED ELITE EVALUATION"
-    )
-
-    print(
-        f"{elite_name}: "
-        f"{elite_results['score']}/100"
-    )
-
-    # Evaluate children
-
-    for name, data in children.items():
 
         result = evaluate_agent(
-            data["agent"],
-            benchmark
+            elite,
+            benchmark,
+            seed=seed + 10000,
         )
 
-        leaderboard.append(
-            (
-                name,
-                result["score"],
-                f"Mutation: "
-                f"{data['mutation']}"
-            )
-        )
-
-        print()
-        print(
-            f"🤖 {name}"
+        results.append(
+            result
         )
 
         print(
-            f"   Parent: "
-            f"{data['parent']}"
+            f"Seed {seed:2d}: "
+            f"{result['score']:3d}/"
+            f"{ROBUSTNESS_TASKS_PER_SEED} "
+            f"({result['accuracy']:.2f}%)"
         )
 
-        print(
-            f"   Mutation: "
-            f"{data['mutation']}"
+    accuracies = [
+        result["accuracy"]
+        for result in results
+    ]
+
+    mean_accuracy = statistics.mean(
+        accuracies
+    )
+
+    median_accuracy = statistics.median(
+        accuracies
+    )
+
+    best_accuracy = max(
+        accuracies
+    )
+
+    worst_accuracy = min(
+        accuracies
+    )
+
+    std_accuracy = (
+        statistics.stdev(
+            accuracies
+        )
+        if len(accuracies) > 1
+        else 0.0
+    )
+
+    skill_averages = {}
+
+    for skill in SKILLS:
+
+        values = [
+            result["skills"][skill]
+            for result in results
+        ]
+
+        skill_averages[skill] = (
+            statistics.mean(values)
         )
 
-        print(
-            f"   Score: "
-            f"{result['score']}/100"
-        )
-
-    leaderboard.sort(
-        key=lambda x: x[1],
-        reverse=True
+    weakest_skill = min(
+        skill_averages,
+        key=skill_averages.get,
     )
 
     print()
-    print(
-        "🏆 V7 GENERATION 4 LEADERBOARD"
-    )
-
+    print("=" * 70)
+    print("🏆 V7.1 ROBUSTNESS RESULTS")
     print("=" * 70)
 
-    for rank, (
-        name,
-        score,
-        info
-    ) in enumerate(
-        leaderboard,
-        start=1
-    ):
+    print(
+        f"Elite: {elite.name}"
+    )
 
-        print(
-            f"{rank}. "
-            f"{name:<20} "
-            f"→ {score:.2f}% "
-            f"| {info}"
-        )
+    print(
+        f"Average accuracy : "
+        f"{mean_accuracy:.2f}%"
+    )
 
-    best_name, best_score, _ = (
-        leaderboard[0]
+    print(
+        f"Median accuracy  : "
+        f"{median_accuracy:.2f}%"
+    )
+
+    print(
+        f"Best seed        : "
+        f"{best_accuracy:.2f}%"
+    )
+
+    print(
+        f"Worst seed       : "
+        f"{worst_accuracy:.2f}%"
+    )
+
+    print(
+        f"Std deviation    : "
+        f"{std_accuracy:.2f}"
     )
 
     print()
-    print(
-        "👑 V7 GENERATION 4 "
-        "ELITE DECISION"
-    )
+    print("📚 SKILL AVERAGES")
+    print("-" * 70)
 
-    if best_name == elite_name:
+    for skill in SKILLS:
 
         print(
-            f"🛡️ Elite preserved: "
-            f"{elite_name}"
+            f"{skill:<10}: "
+            f"{skill_averages[skill]:.2f}%"
+        )
+
+    print()
+    print("=" * 70)
+    print("🔬 GENERALIZATION VERDICT")
+    print("=" * 70)
+
+    if mean_accuracy >= 90:
+
+        print(
+            "🔥 EXCELLENT — "
+            "average unseen accuracy >= 90%"
+        )
+
+    elif mean_accuracy >= 85:
+
+        print(
+            "🟢 STRONG — "
+            "average unseen accuracy >= 85%"
+        )
+
+    elif mean_accuracy >= 80:
+
+        print(
+            "🟡 GOOD — "
+            "average unseen accuracy >= 80%"
         )
 
     else:
 
         print(
-            f"🔥 NEW ELITE: "
-            f"{best_name}"
+            "🔴 NEEDS IMPROVEMENT — "
+            "average unseen accuracy < 80%"
         )
+
+    if std_accuracy <= 3:
 
         print(
-            f"Improvement: "
-            f"{best_score - elite_results['score']:+.2f}"
+            "🛡️ VERY STABLE — "
+            "low variation between seeds"
         )
 
-    return {
-        "elite": best_name,
-        "score": best_score,
-        "leaderboard": leaderboard,
-        "children": children,
-    }
+    elif std_accuracy <= 6:
 
+        print(
+            "🟢 STABLE — "
+            "acceptable variation"
+        )
 
-# ============================================================
-# GENERIC AGENT EVALUATOR
-# ============================================================
+    else:
 
-def evaluate_agent(
-    agent,
-    tasks
-):
+        print(
+            "⚠️ HIGH VARIANCE — "
+            "performance varies significantly"
+        )
 
-    correct = 0
-
-    by_skill = defaultdict(
-        lambda: [0, 0]
+    print(
+        f"🎯 Weakest average skill: "
+        f"{weakest_skill} "
+        f"({skill_averages[weakest_skill]:.2f}%)"
     )
 
-    for task in tasks:
-
-        try:
-
-            result = agent.solve(task)
-
-            prediction = (
-                result.get(
-                    "answer",
-                    result.get(
-                        "correct",
-                        False
-                    )
-                )
-            )
-
-            if isinstance(
-                prediction,
-                bool
-            ):
-
-                success = prediction
-
-            else:
-
-                success = (
-                    normalize_answer(
-                        prediction
-                    )
-                    ==
-                    normalize_answer(
-                        task["answer"]
-                    )
-                )
-
-        except Exception:
-
-            success = False
-
-        skill = task["type"]
-
-        by_skill[skill][1] += 1
-
-        if success:
-
-            correct += 1
-            by_skill[skill][0] += 1
-
-    skill_scores = {}
-
-    for skill in SKILLS:
-
-        c, total = (
-            by_skill[skill]
-        )
-
-        skill_scores[skill] = (
-            c / total * 100
-            if total
-            else 0.0
-        )
+    print()
+    print(
+        "🛡️ Elite was NOT modified."
+    )
 
     return {
-        "score": correct,
-        "accuracy": (
-            correct /
-            len(tasks) *
-            100
-        ),
-        "skills": skill_scores,
+        "elite": elite.name,
+        "results": results,
+        "average": mean_accuracy,
+        "median": median_accuracy,
+        "best": best_accuracy,
+        "worst": worst_accuracy,
+        "std": std_accuracy,
+        "skill_averages": skill_averages,
     }
 
 
-# ============================================================
-# MAIN EXPERIMENT
-# ============================================================
+# ================================================================
+# MAIN EVOLUTION ENGINE
+# ================================================================
 
-def run_v7():
+def run_evolution() -> Tuple[Agent, Dict[str, Any]]:
+    """
+    Run the complete V7 evolutionary experiment.
+    """
 
     print()
     print("=" * 70)
-    print("🧬 AI-EVOLUTION-ENGINE — V7")
+    print("🧬 V7 ELITE EVOLUTION ENGINE")
     print("=" * 70)
 
-    # -------------------------
-    # Generation 1
-    # -------------------------
-
-    population, results = (
-        generation_1()
+    print(
+        "Experimental AI-agent evolutionary benchmark"
     )
 
-    # -------------------------
-    # Generation 2
-    # -------------------------
-
-    population = adaptive_mutation(
-        population,
-        results
+    print(
+        f"Seed: {SEED}"
     )
 
-    results = evaluate_population(
-        population,
-        seed=20260703
+    print(
+        f"Generations: {MAX_GENERATIONS}"
     )
 
-    # -------------------------
-    # Generation 3
-    # -------------------------
-
-    population = generation_3(
-        population,
-        results
+    print(
+        f"Population: {POPULATION_SIZE}"
     )
 
-    results = evaluate_population(
-        population,
-        seed=2026
+    print(
+        f"Elite count: {ELITE_COUNT}"
     )
 
-    # -------------------------
-    # Select elite
-    # -------------------------
+    print()
 
-    best_name = max(
-        results,
-        key=results.get
+    rng = random.Random(
+        SEED
     )
 
-    best_data = population[
-        best_name
-    ]
+    population = (
+        create_initial_population()
+    )
 
-    # -------------------------
-    # Generation 4
-    # -------------------------
+    all_history = []
 
-    final = generation_4(
-        best_name,
-        best_data["agent"],
-        best_data["score"]
+    # ------------------------------------------------------------
+    # Evolution loop
+    # ------------------------------------------------------------
+
+    for generation in range(
+        1,
+        MAX_GENERATIONS + 1,
+    ):
+
+        print()
+        print("=" * 70)
+        print(
+            f"🧬 GENERATION {generation}"
+        )
+        print("=" * 70)
+
+        benchmark = generate_tasks(
+            seed=SEED + generation,
+            n=TASKS_PER_BENCHMARK,
+        )
+
+        generation_results = {}
+
+        scores = {}
+
+        for agent in population:
+
+            result = evaluate_agent(
+                agent,
+                benchmark,
+                seed=SEED + generation * 100,
+            )
+
+            generation_results[
+                agent.name
+            ] = result
+
+            scores[
+                agent.name
+            ] = result["accuracy"]
+
+            print(
+                f"{'🏆' if agent.elite else '🤖'} "
+                f"{agent.name:<24} "
+                f"→ {result['accuracy']:.2f}%"
+            )
+
+        print_generation_report(
+            generation,
+            generation_results,
+            population,
+        )
+
+        # --------------------------------------------------------
+        # Evolution summary
+        # --------------------------------------------------------
+
+        ranked = sorted(
+            population,
+            key=lambda agent: scores[agent.name],
+            reverse=True,
+        )
+
+        best = ranked[0]
+
+        print()
+        print(
+            f"👑 Generation {generation} best: "
+            f"{best.name} "
+            f"→ {scores[best.name]:.2f}%"
+        )
+
+        all_history.append(
+            {
+                "generation": generation,
+                "results": generation_results,
+                "best": best.name,
+                "best_score": scores[best.name],
+            }
+        )
+
+        # --------------------------------------------------------
+        # Do not create another generation after final one.
+        # --------------------------------------------------------
+
+        if generation == MAX_GENERATIONS:
+
+            final_population = population
+
+            final_scores = scores
+
+            final_elites = select_elites(
+                final_population,
+                final_scores,
+                elite_count=1,
+            )
+
+            final_elite = final_elites[0]
+
+            break
+
+        # --------------------------------------------------------
+        # Generate next generation
+        # --------------------------------------------------------
+
+        population = (
+            generate_next_generation(
+                population=population,
+                scores=scores,
+                generation=generation + 1,
+                rng=rng,
+            )
+        )
+
+        print()
+        print(
+            f"🧬 Generation "
+            f"{generation + 1} created."
+        )
+
+        print(
+            "🛡️ Elites protected."
+        )
+
+    # ------------------------------------------------------------
+    # Final elite
+    # ------------------------------------------------------------
+
+    print()
+    print("=" * 70)
+    print("👑 FINAL ELITE")
+    print("=" * 70)
+
+    print(
+        f"Model: {final_elite.name}"
+    )
+
+    print(
+        f"Generation: "
+        f"{final_elite.generation}"
+    )
+
+    print(
+        f"Parent: "
+        f"{final_elite.parent}"
+    )
+
+    print(
+        f"Mutation: "
+        f"{final_elite.mutation}"
+    )
+
+    print()
+    print("🧠 FINAL SKILL PROFILE")
+
+    for skill, value in (
+        final_elite.skills.items()
+    ):
+
+        print(
+            f"{skill:<10}: "
+            f"{value:.3f}"
+        )
+
+    # ------------------------------------------------------------
+    # Robustness test
+    # ------------------------------------------------------------
+
+    robustness = robustness_test(
+        final_elite
     )
 
     print()
@@ -1271,22 +1240,35 @@ def run_v7():
     print("=" * 70)
 
     print(
-        f"Final elite: "
-        f"{final['elite']}"
+        f"Final Elite: "
+        f"{final_elite.name}"
     )
 
     print(
-        f"Final score: "
-        f"{final['score']:.2f}%"
+        f"Unseen average: "
+        f"{robustness['average']:.2f}%"
     )
 
-    return final
+    return (
+        final_elite,
+        {
+            "history": all_history,
+            "robustness": robustness,
+        },
+    )
 
 
-# ============================================================
+# ================================================================
 # ENTRY POINT
-# ============================================================
+# ================================================================
 
 if __name__ == "__main__":
 
-    run_v7()
+    final_agent, experiment = (
+        run_evolution()
+    )
+
+    print()
+    print("=" * 70)
+    print("🏁 EXPERIMENT FINISHED")
+    print("=" * 70)
